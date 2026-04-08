@@ -1,30 +1,14 @@
 /**
- * Capsule vs MeshBVH — modular FPS collision.
+ * Capsule vs MeshBVH — physics helpers (build once per map load).
  *
- * ## Blender / glTF preparation (export collision.glb)
- * - One mesh per logical object (wall, floor slab, stair flight, crate, …).
- * - Apply all transforms before export: Object → Apply (Location, Rotation, Scale).
- * - Optional: disable rendering on the collision collection; only load it for physics.
- *
- * ## Per-mesh labels (Custom Properties → exported as userData)
- * Set `type` (string) on each collision mesh:
- *   - 'floor'  → walkable: vertical ground rays snap here; excluded from horizontal BVH
- *                (no “invisible wall” on flat ground).
- *   - 'stair'  → same as floor for snapping; excluded from horizontal BVH (use separate
- *                'wall' meshes for stringers/risers if the player must not pass through sides).
- *   - 'wall'   → blocks movement; full X/Z slide; never used as ground snap target.
- *   - 'object' → small props (tables, crates): block X/Z only; never used as ground snap.
- *
- * If **any** mesh in the file has `userData.type` set, unknown/missing types are treated as **'wall'**
- * (conservative: never lose a collider). If **no** mesh is typed, legacy heuristics apply
- * (name + bounding box) for walkable vs blocker split.
- *
- * Performance: BVH builds run once at load; nothing is recomputed per frame.
+ * Blender: see previous docs (userData.type floor|stair|wall|object).
  */
 
 import * as THREE from 'three';
 import { MeshBVH } from 'three-mesh-bvh';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+export const NO_GROUND = -9999;
 
 const _seg = new THREE.Line3();
 const _box = new THREE.Box3();
@@ -38,9 +22,7 @@ const _n = new THREE.Vector3();
 const _e1 = new THREE.Vector3();
 const _e2 = new THREE.Vector3();
 
-/** When using a merged “everything” BVH for horizontal, skip nearly-horizontal triangles (floors). */
 export const HORIZONTAL_COLLISION_MAX_UP_NORMAL = 0.45;
-
 export const WALKABLE_MIN_FOOTPRINT_XZ = 2.0;
 export const WALKABLE_MAX_VERTICAL_EXTENT = 0.55;
 export const PROP_MAX_FOOTPRINT_XZ = 1.4;
@@ -52,7 +34,6 @@ const RE_WALKABLE_NAME =
 const RE_PROP_NAME =
   /table|chair|chaise|crate|caisse|box|meuble|furniture|desk|bureau|lamp|lampe|barrel|baril|bush|pot|plant|vase|prop_|_prop|detail|decor|bench|bed|canap|sofa|locker|cabinet|shelf|etagere|counter|comptoir|stool|tabouret|crate_|_crate|small_/i;
 
-/** Read Blender custom property `type` (or optional `collisionType`). */
 export function getCollisionMeshType(mesh) {
   const raw = mesh.userData?.type ?? mesh.userData?.collisionType;
   if (raw == null || raw === '') return null;
@@ -67,24 +48,18 @@ function rootHasAnyExplicitType(root) {
   return any;
 }
 
-/** Legacy / overrides (still supported). */
 export function classifyMeshWalkable(mesh, sx, sy, sz) {
   if (mesh.userData?.walkableGround) return true;
   if (mesh.userData?.propOnly) return false;
-
   const name = mesh.name || '';
   if (RE_PROP_NAME.test(name)) return false;
   if (RE_WALKABLE_NAME.test(name)) return true;
-
   const foot = Math.max(sx, sz, 1e-6);
   if (foot <= PROP_MAX_FOOTPRINT_XZ && sy <= PROP_MAX_VERTICAL_EXTENT) return false;
   if (foot >= WALKABLE_MIN_FOOTPRINT_XZ && sy <= WALKABLE_MAX_VERTICAL_EXTENT) return true;
   return false;
 }
 
-/**
- * Walkable BVH membership (ground rays only).
- */
 export function meshIsWalkableForGround(mesh, sx, sy, sz, explicitTypeMode) {
   const t = getCollisionMeshType(mesh);
   if (t === 'floor' || t === 'stair') return true;
@@ -93,9 +68,6 @@ export function meshIsWalkableForGround(mesh, sx, sy, sz, explicitTypeMode) {
   return classifyMeshWalkable(mesh, sx, sy, sz);
 }
 
-/**
- * Horizontal blocker BVH membership (walls + props + unknown when typed).
- */
 export function meshIsHorizontalBlocker(mesh, sx, sy, sz, explicitTypeMode) {
   const t = getCollisionMeshType(mesh);
   if (t === 'object' || t === 'wall') return true;
@@ -104,7 +76,6 @@ export function meshIsHorizontalBlocker(mesh, sx, sy, sz, explicitTypeMode) {
   return !classifyMeshWalkable(mesh, sx, sy, sz);
 }
 
-/** Visual mesh raycast: skip props / walls for ground snap. */
 export function meshShouldSkipGroundSnap(mesh) {
   if (!mesh) return false;
   if (mesh.userData?.walkableGround) return false;
@@ -136,25 +107,8 @@ function _mergeBVH(geoms) {
   return merged;
 }
 
-/**
- * @returns {{
- *   fullGeometry: THREE.BufferGeometry | null,
- *   walkableGeometry: THREE.BufferGeometry | null,
- *   blockerGeometry: THREE.BufferGeometry | null,
- *   collisionMeshes: THREE.Mesh[],
- *   stats: object,
- *   explicitTypeMode: boolean,
- *   horizontalUsesBlockerOnly: boolean,
- * }}
- */
 export function buildPartitionedCollisionBVH(root) {
-  const emptyStats = {
-    total: 0,
-    walkable: 0,
-    blocker: 0,
-    floorStair: 0,
-    wallObject: 0,
-  };
+  const emptyStats = { total: 0, walkable: 0, blocker: 0, floorStair: 0, wallObject: 0 };
 
   if (!root) {
     return {
@@ -170,7 +124,6 @@ export function buildPartitionedCollisionBVH(root) {
 
   root.updateMatrixWorld(true);
   const explicitTypeMode = rootHasAnyExplicitType(root);
-
   const entries = [];
   const collisionMeshes = [];
 
@@ -182,10 +135,7 @@ export function buildPartitionedCollisionBVH(root) {
     if (!g.attributes.position || g.attributes.position.count < 3) return;
     g.computeBoundingBox();
     const b = g.boundingBox;
-    const sx = b.max.x - b.min.x;
-    const sy = b.max.y - b.min.y;
-    const sz = b.max.z - b.min.z;
-    entries.push({ mesh: o, geom: g, sx, sy, sz });
+    entries.push({ mesh: o, geom: g, sx: b.max.x - b.min.x, sy: b.max.y - b.min.y, sz: b.max.z - b.min.z });
   });
 
   if (entries.length === 0) {
@@ -203,7 +153,6 @@ export function buildPartitionedCollisionBVH(root) {
   const fullParts = entries.map((e) => e.geom);
   const walkParts = [];
   const blockParts = [];
-
   let nWalk = 0;
   let nBlock = 0;
   let nFloorStair = 0;
@@ -213,15 +162,11 @@ export function buildPartitionedCollisionBVH(root) {
     const t = getCollisionMeshType(e.mesh);
     if (t === 'floor' || t === 'stair') nFloorStair++;
     if (t === 'object' || t === 'wall') nWallObject++;
-
-    const walk = meshIsWalkableForGround(e.mesh, e.sx, e.sy, e.sz, explicitTypeMode);
-    const block = meshIsHorizontalBlocker(e.mesh, e.sx, e.sy, e.sz, explicitTypeMode);
-
-    if (walk) {
+    if (meshIsWalkableForGround(e.mesh, e.sx, e.sy, e.sz, explicitTypeMode)) {
       walkParts.push(e.geom.clone());
       nWalk++;
     }
-    if (block) {
+    if (meshIsHorizontalBlocker(e.mesh, e.sx, e.sy, e.sz, explicitTypeMode)) {
       blockParts.push(e.geom.clone());
       nBlock++;
     }
@@ -231,10 +176,7 @@ export function buildPartitionedCollisionBVH(root) {
   const mergedWalk = walkParts.length ? _mergeBVH(walkParts) : null;
   let mergedBlock = blockParts.length ? _mergeBVH(blockParts) : null;
   const horizontalUsesBlockerOnly = mergedBlock != null && blockParts.length > 0;
-
-  if (!mergedBlock && mergedFull) {
-    mergedBlock = mergedFull;
-  }
+  if (!mergedBlock && mergedFull) mergedBlock = mergedFull;
 
   return {
     fullGeometry: mergedFull,
@@ -258,14 +200,9 @@ export function mergeWorldCollisionGeometry(root) {
   return fullGeometry;
 }
 
-/**
- * Horizontal capsule resolve (X/Z only on player Y).
- * @param {{ passes?: number, skipFloorLikeTriangles?: boolean }} [opts]
- */
 export function bvhHorizontalMoveAndResolve(pos, dx, dz, radius, height, geometry, opts = {}) {
-  const passes = opts.passes ?? 10;
+  const passes = opts.passes ?? 12;
   const skipFloorLikeTriangles = opts.skipFloorLikeTriangles !== false;
-
   const tree = geometry?.boundsTree;
   if (!tree) {
     pos.x += dx;
@@ -275,14 +212,12 @@ export function bvhHorizontalMoveAndResolve(pos, dx, dz, radius, height, geometr
 
   pos.x += dx;
   pos.z += dz;
-
   const endY = pos.y + Math.max(radius * 1.2, height * 0.92);
 
   for (let p = 0; p < passes; p++) {
     _pre.set(pos.x, pos.y + radius, pos.z);
     _seg.start.copy(_pre);
     _seg.end.set(pos.x, endY, pos.z);
-
     _box.makeEmpty();
     _box.expandByPoint(_seg.start);
     _box.expandByPoint(_seg.end);
@@ -294,10 +229,8 @@ export function bvhHorizontalMoveAndResolve(pos, dx, dz, radius, height, geometr
       intersectsTriangle: (tri) => {
         _triangleUpNormal(tri, _n);
         if (skipFloorLikeTriangles && _n.y > HORIZONTAL_COLLISION_MAX_UP_NORMAL) return;
-
         const dist = tri.closestPointToSegment(_seg, _triP, _capP);
         if (dist >= radius) return;
-
         const depth = radius - dist;
         _dir.subVectors(_capP, _triP);
         _dir.y = 0;
@@ -306,7 +239,6 @@ export function bvhHorizontalMoveAndResolve(pos, dx, dz, radius, height, geometr
           if (_dir.lengthSq() < 1e-12) return;
         }
         _dir.normalize();
-
         _seg.start.addScaledVector(_dir, depth);
         _seg.end.addScaledVector(_dir, depth);
       },
@@ -315,23 +247,18 @@ export function bvhHorizontalMoveAndResolve(pos, dx, dz, radius, height, geometr
     const ddx = _seg.start.x - _pre.x;
     const ddz = _seg.start.z - _pre.z;
     if (Math.abs(ddx) + Math.abs(ddz) < 1e-9) break;
-
     pos.x += ddx;
     pos.z += ddz;
   }
 }
 
-/**
- * Resolve horizontal move in two axis steps (reduces corner snagging vs one diagonal push).
- */
 export function bvhHorizontalMoveAndResolveSplitAxes(pos, dx, dz, radius, height, geometry, opts = {}) {
   if (Math.abs(dx) < 1e-12 && Math.abs(dz) < 1e-12) return;
   bvhHorizontalMoveAndResolve(pos, dx, 0, radius, height, geometry, opts);
   bvhHorizontalMoveAndResolve(pos, 0, dz, radius, height, geometry, opts);
 }
 
-/** Full geometry 3D ejection — spawn / respawn inside colliders. */
-export function bvhResolveCapsuleFeet(pos, radius, height, geometry, iterations = 12) {
+export function bvhResolveCapsuleFeet(pos, radius, height, geometry, iterations = 14) {
   const tree = geometry?.boundsTree;
   if (!tree) return;
   const endY = pos.y + Math.max(radius * 1.2, height * 0.92);
@@ -344,7 +271,6 @@ export function bvhResolveCapsuleFeet(pos, radius, height, geometry, iterations 
     _box.expandByPoint(_seg.end);
     _box.min.addScalar(-radius);
     _box.max.addScalar(radius);
-
     let moved = false;
     tree.shapecast({
       intersectsBounds: (box) => box.intersectsBox(_box),
@@ -368,35 +294,65 @@ export function bvhResolveCapsuleFeet(pos, radius, height, geometry, iterations 
   }
 }
 
-export function bvhGroundYBelow(geometry, x, feetY, z) {
+/**
+ * Single vertical ray on BVH. Options adapt probe depth to map height.
+ * @param {{ probeAboveFeet?: number; maxStepUp?: number; maxDropBelowFeet?: number }} [opts]
+ */
+export function bvhGroundYBelow(geometry, x, feetY, z, opts = {}) {
   const tree = geometry?.boundsTree;
-  if (!tree) return -9999;
+  if (!tree) return NO_GROUND;
 
-  _ray.origin.set(x, feetY + 2.2, z);
+  const probeAbove = opts.probeAboveFeet ?? 2.45;
+  const maxStepUp = opts.maxStepUp ?? 0.48;
+  const maxDrop = opts.maxDropBelowFeet ?? 60;
+
+  _ray.origin.set(x, feetY + probeAbove, z);
   _ray.direction.copy(_down);
   const hit = tree.raycastFirst(_ray, THREE.DoubleSide);
-  if (!hit || hit.point === undefined) return -9999;
+  if (!hit || hit.point === undefined) return NO_GROUND;
 
   const py = hit.point.y;
-  if (py > feetY + 0.35) return -9999;
-  if (py < feetY - 15) return -9999;
+  if (py > feetY + maxStepUp) return NO_GROUND;
+  if (py < feetY - maxDrop) return NO_GROUND;
 
   if (hit.face && hit.object) {
     _n.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
-    if (_n.y <= 0.06) return -9999;
+    if (_n.y <= 0.05) return NO_GROUND;
   }
-
   return py;
 }
 
-export function bvhSpawnGroundY(geometry, x, z, preferY, mapMaxY) {
-  const tree = geometry?.boundsTree;
-  if (!tree) return -9999;
+/** Several rays around (x,z) — stable on uneven meshes / edges. */
+export function bvhGroundYBelowMulti(geometry, x, feetY, z, sampleRadius, opts = {}) {
+  if (!geometry?.boundsTree) return NO_GROUND;
+  const pat = [
+    [0, 0],
+    [0.85, 0],
+    [-0.85, 0],
+    [0, 0.85],
+    [0, -0.85],
+    [0.6, 0.6],
+    [-0.6, 0.6],
+    [0.6, -0.6],
+    [-0.6, -0.6],
+  ];
+  let best = NO_GROUND;
+  const r = Math.max(0.001, sampleRadius);
+  for (const [kx, kz] of pat) {
+    const y = bvhGroundYBelow(geometry, x + kx * r, feetY, z + kz * r, opts);
+    if (y > best) best = y;
+  }
+  return best;
+}
 
-  const originY = Math.max((mapMaxY ?? preferY + 200) + 80, preferY + 80);
+export function bvhSpawnGroundY(geometry, x, z, preferY, mapMaxY, opts = {}) {
+  const tree = geometry?.boundsTree;
+  if (!tree) return NO_GROUND;
+  const extra = opts.spawnExtraAboveMax ?? 120;
+  const originY = Math.max((mapMaxY ?? preferY + 200) + extra, preferY + 80);
   _ray.origin.set(x, originY, z);
   _ray.direction.copy(_down);
   const hit = tree.raycastFirst(_ray, THREE.DoubleSide);
-  if (!hit?.point) return -9999;
+  if (!hit?.point) return NO_GROUND;
   return hit.point.y;
 }
