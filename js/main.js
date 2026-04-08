@@ -17,9 +17,14 @@ import { NetworkClient, RemotePlayerManager } from './network.js';
 const MODELS = {
   /** GLB visuel (équivalent map.glb). */
   ville: 'models/ville.glb',
-  /** GLB collision ; optionnel — sinon physique sur le visuel + AABB. */
+  /**
+   * GLB collision. Mettre `null` ou `''` pour ne pas le charger (BVH tout de suite sur le visuel).
+   * Si le fichier manque / plante, timeout → même fallback (évite chargement bloqué sur 1/3).
+   */
   collision: 'models/collision.glb',
 };
+/** Timeout réseau + parse collision.glb (ms). Après ça : fallback BVH sur la ville. */
+const COLLISION_GLB_TIMEOUT_MS = 70000;
 /** true = 4 murs invisibles sur la bbox du GLB visuel (recommandé avec collision.glb / BVH si la mesh n’inclut pas les bords). */
 const MAP_BOUNDARY_COLLISION = true;
 /**
@@ -134,6 +139,74 @@ function loadMap() {
   );
 }
 
+function tryCollisionBVHFromVisual(model, reason) {
+  try {
+    const ok = collisionWorld.tryAttachBVHFromVisualMap(model);
+    if (!ok) {
+      console.warn(`[Collisions] ${reason} — pas de BVH (carte trop lourde ou erreur). Sol = raycasts visuels + AABB.`);
+    }
+  } catch (e) {
+    console.error('[Collisions] Fallback visuel :', e);
+  }
+}
+
+/**
+ * Charge collision.glb puis construit le BVH. Ne bloque jamais indéfiniment :
+ * try/catch, une seule résolution Promise, timeout réseau.
+ */
+function loadCollisionsPhase(model) {
+  const url = MODELS.collision;
+  if (url == null || url === '') {
+    tryCollisionBVHFromVisual(model, 'collision.glb désactivé (MODELS.collision vide)');
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      resolve();
+    };
+
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      console.warn(`[Collisions] Timeout ${COLLISION_GLB_TIMEOUT_MS} ms — abandon collision.glb, fallback visuel.`);
+      tryCollisionBVHFromVisual(model, 'timeout chargement');
+      done();
+    }, COLLISION_GLB_TIMEOUT_MS);
+
+    loader.load(
+      url,
+      (cgltf) => {
+        if (settled) return;
+        clearTimeout(timeoutId);
+        ui.updateLoadProgress('Collisions (BVH)', 1, 3);
+        try {
+          const ok = collisionWorld.attachBVHFromGLTFScene(cgltf.scene);
+          if (!ok) {
+            console.warn('[Collisions] collision.glb sans géométrie valide.');
+            tryCollisionBVHFromVisual(model, 'collision.glb vide');
+          }
+        } catch (e) {
+          console.error('[Collisions] Erreur construction BVH (collision.glb) :', e);
+          tryCollisionBVHFromVisual(model, 'erreur BVH');
+        }
+        done();
+      },
+      undefined,
+      (err) => {
+        if (settled) return;
+        clearTimeout(timeoutId);
+        console.warn('[GLB] collision.glb —', err?.message || err);
+        tryCollisionBVHFromVisual(model, 'fichier absent ou erreur réseau');
+        done();
+      }
+    );
+  });
+}
+
 async function onMapLoaded(model, animations) {
   collisionWorld.buildFromGLB(model, {
     boundaryWalls: MAP_BOUNDARY_COLLISION,
@@ -141,25 +214,7 @@ async function onMapLoaded(model, animations) {
   });
 
   ui.updateLoadProgress('Collisions', 1, 3);
-  await new Promise((resolve) => {
-    loader.load(
-      MODELS.collision,
-      (cgltf) => {
-        const ok = collisionWorld.attachBVHFromGLTFScene(cgltf.scene);
-        if (!ok) {
-          console.warn('[Collisions] collision.glb invalide — BVH auto sur le GLB visuel (si assez léger).');
-          collisionWorld.tryAttachBVHFromVisualMap(model);
-        }
-        resolve();
-      },
-      undefined,
-      (err) => {
-        console.warn('[GLB] collision.glb introuvable —', err?.message || err);
-        collisionWorld.tryAttachBVHFromVisualMap(model);
-        resolve();
-      }
-    );
-  });
+  await loadCollisionsPhase(model);
 
   combat.setWorldMeshes(collisionWorld.allMeshesForRaycast);
 
