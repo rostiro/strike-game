@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { CollisionWorld } from './collisions.js';
-import { Player, PLAYER_RADIUS, PLAYER_HEIGHT } from './player.js';
+import { Player, PLAYER_RADIUS, PLAYER_HEIGHT, PLAYER_BODY_SCALE } from './player.js';
 import { WeaponSystem, WEAPON_DEFS } from './weapons.js';
 import { CombatSystem } from './combat.js';
 import { UI } from './ui.js';
@@ -631,7 +631,7 @@ function animate() {
             if (targetEntry) break;
           }
           if (targetEntry) {
-            const headOff = targetEntry.mesh.userData.headShotMinOffset ?? 0.32;
+            const headOff = targetEntry.mesh.userData.headShotMinOffset ?? 0.32 * PLAYER_BODY_SCALE;
             const isHead = hitObj.point.y >= targetEntry.mesh.position.y + headOff;
             const dmg = isHead ? weapons.current.headDmg : weapons.current.bodyDmg;
             net.sendHit(targetEntry.id, dmg, isHead);
