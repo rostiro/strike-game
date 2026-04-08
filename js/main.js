@@ -29,10 +29,12 @@ const MAP_BOUNDARY_COLLISION = true;
  */
 const COLLISION_WALL_MODE = 'ground';
 /**
- * Spawns fixes (optionnel). Laisser [] pour le nouveau ville.glb : placement auto depuis la bbox + sol.
- * Reprends des coords avec l’éditeur in-game (mode spawn) puis colle-les ici si besoin.
+ * Spawns fixes (optionnel). [] = placement auto depuis la bbox + sol.
  */
-const CUSTOM_SPAWNS = [];
+const CUSTOM_SPAWNS = [
+  { x: 49.452, y: 1.085, z: -52.199 },
+  { x: -44.848, y: 1.037, z: 15.86 },
+];
 const STATE = { MENU: 0, PLAYING: 1, PAUSED: 2, LOBBY: 3, WEAPON_SELECT: 4, SPAWN_EDIT: 5 };
 const LS_SPAWNS = 'sz_custom_spawns';
 
@@ -145,13 +147,15 @@ async function onMapLoaded(model, animations) {
       (cgltf) => {
         const ok = collisionWorld.attachBVHFromGLTFScene(cgltf.scene);
         if (!ok) {
-          console.warn('[Collisions] collision.glb sans mesh valide — physique AABB / sol inchangés.');
+          console.warn('[Collisions] collision.glb invalide — BVH auto sur le GLB visuel (si assez léger).');
+          collisionWorld.tryAttachBVHFromVisualMap(model);
         }
         resolve();
       },
       undefined,
       (err) => {
-        console.warn('[GLB] collision.glb introuvable ou erreur —', err?.message || err);
+        console.warn('[GLB] collision.glb introuvable —', err?.message || err);
+        collisionWorld.tryAttachBVHFromVisualMap(model);
         resolve();
       }
     );
