@@ -1,17 +1,25 @@
 import * as THREE from 'three';
 import { NO_GROUND } from './bvh-capsule.js';
 
-export const PLAYER_HEIGHT = 0.42;
-export const PLAYER_RADIUS = 0.075;
-const EYE_OFFSET = 0.36;
-const WALK_SPEED = 3.0;
+/**
+ * Échelle du corps dans le monde (ancienne capsule ~42 cm → ×4 ≈ 1,7 m).
+ * À garder aligné avec mannequins / joueurs réseau dans combat.js et network.js.
+ */
+export const PLAYER_BODY_SCALE = 4;
+
+export const PLAYER_HEIGHT = 0.42 * PLAYER_BODY_SCALE;
+export const PLAYER_RADIUS = 0.075 * PLAYER_BODY_SCALE;
+const EYE_OFFSET = 0.36 * PLAYER_BODY_SCALE;
+const WALK_SPEED = 5.0;
 const SPRINT_MULT = 1.7;
 const GRAVITY = 14.0;
-const JUMP_VEL = 3.2;
+const JUMP_VEL = 6.0;
 const MOUSE_SENS = 0.002;
 /** Marge verticale pour snap au sol (marches / légers dénivelés sans coller au plafond). */
-const GROUND_SNAP_UP = 0.22;
-const GROUND_PROBE_ABOVE_FEET = 0.18;
+const GROUND_SNAP_UP = 0.22 * PLAYER_BODY_SCALE;
+const GROUND_PROBE_ABOVE_FEET = 0.18 * PLAYER_BODY_SCALE;
+/** Seuil « au-dessus des pieds » pour considérer qu’on n’est plus au sol (proportionnel à la taille). */
+const AIRBORNE_ABOVE_FEET = 0.27 * PLAYER_BODY_SCALE;
 
 export class Player {
   constructor(camera) {
@@ -127,7 +135,7 @@ export class Player {
           this.position.y = snapY;
           this.velocity.y = 0;
           this.onGround = true;
-        } else if (this.position.y > groundY + GROUND_PROBE_ABOVE_FEET + 0.27) {
+        } else if (this.position.y > groundY + GROUND_PROBE_ABOVE_FEET + AIRBORNE_ABOVE_FEET) {
           this.onGround = false;
         }
       }
