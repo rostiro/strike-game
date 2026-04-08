@@ -15,7 +15,7 @@ import { MeshBVH } from 'three-mesh-bvh';
 // ---------------------------------------------------------------------------
 // Config chemins (relatifs à cette page)
 // ---------------------------------------------------------------------------
-const MAP_URL = './map.glb';
+const MAP_URL = 'models/ville.glb';
 const COLLISION_URL = './collision.glb';
 
 /** Hauteur totale capsule (m), rayon (m) — comme demandé ~2 et ~0.5 */
