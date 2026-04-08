@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {
-  bvhGroundYBelow,
+  NO_GROUND,
+  bvhGroundYBelowMulti,
   bvhHorizontalMoveAndResolveSplitAxes,
   bvhResolveCapsuleFeet,
   bvhSpawnGroundY,
@@ -13,9 +14,10 @@ const _size = new THREE.Vector3();
 const _ray = new THREE.Raycaster();
 const _n = new THREE.Vector3();
 const _spawnTry = new THREE.Vector3();
+const _groundSample = new THREE.Vector3();
 
-/** Distance (m) sous le point le plus bas de la bbox du GLB visuel : plancher infini pour éviter la chute. */
-const SAFETY_FLOOR_OFFSET = 12;
+/** Limite triangles pour BVH auto depuis le GLB visuel (évite freeze sur scènes énormes). */
+export const VISUAL_BVH_TRIANGLE_BUDGET = 1_100_000;
 
 /** Meshes dont le nom indique qu’on ne doit pas générer de murs (décor, LOD, etc.) */
 const RE_SKIP_WALL_BY_NAME = /no_?collide|nocol|decal|ignore_?mesh|trigger|volume|helper|proxy|lod\d|_lod|sky(box)?|emissive_only|glass_|nav_?mesh|blockout|occluder|occlusion|cull|invis|hidden|backdrop|debug|wire|bounds_?only|editor_|__preview|collisionpreview|stair|stairs|step|marche|escalier|ramp|rampe|balustr|banister|handrail/i;
@@ -82,6 +84,11 @@ export class CollisionWorld {
     this._wantBoundaryWalls = false;
     /** Y du plancher de secours (sous mapBounds.min.y), ou null si pas de carte chargée */
     this._safetyFloorY = null;
+    /** Taille monde (m) après buildFromGLB — sert aux rayons / marges adaptatifs */
+    this._mapSpan = new THREE.Vector3(0, 0, 0);
+    this._mapDiag = 1;
+    /** true si le BVH vient du fallback visuel (pas collision.glb) */
+    this._bvhFromVisualFallback = false;
   }
 
   /** Sol « infini » sous la carte ; null si aucune bbox. */
@@ -91,7 +98,7 @@ export class CollisionWorld {
 
   _fallbackSafetyGroundY() {
     if (this._safetyFloorY != null && !this.mapBounds.isEmpty()) return this._safetyFloorY;
-    return -9999;
+    return NO_GROUND;
   }
 
   _recomputeSafetyFloor() {
@@ -99,7 +106,64 @@ export class CollisionWorld {
       this._safetyFloorY = null;
       return;
     }
-    this._safetyFloorY = this.mapBounds.min.y - SAFETY_FLOOR_OFFSET;
+    const spanY = this._mapSpan.y;
+    const off = Math.max(14, spanY * 0.075, this._mapDiag * 0.028);
+    this._safetyFloorY = this.mapBounds.min.y - off;
+  }
+
+  /** Paramètres rayons sol BVH / mesh selon la taille de la carte */
+  _groundProbeOptions() {
+    const sy = Math.max(this._mapSpan.y, 8);
+    const probeAboveFeet = THREE.MathUtils.clamp(sy * 0.22, 2.8, 160);
+    const maxDropBelowFeet = THREE.MathUtils.clamp(sy * 1.2, 45, 400);
+    const maxStepUp = THREE.MathUtils.clamp(0.35 + sy * 0.012, 0.38, 0.95);
+    return { probeAboveFeet, maxDropBelowFeet, maxStepUp };
+  }
+
+  _spawnRayOptions() {
+    const sy = Math.max(this._mapSpan.y, 20);
+    return { spawnExtraAboveMax: THREE.MathUtils.clamp(sy * 0.35, 100, 500) };
+  }
+
+  _meshRayFar(originY, minY) {
+    const sy = Math.max(this._mapSpan.y, 40);
+    const vSpan = this.mapBounds.isEmpty() ? sy : Math.max(this.mapBounds.max.y - this.mapBounds.min.y, 40);
+    return Math.min(25000, Math.max(380, originY - minY + 100, vSpan * 5, this._mapDiag * 2));
+  }
+
+  /**
+   * Compte les triangles (approx.) d’une scène — pour décider du fallback BVH visuel.
+   */
+  static estimateTriangleCount(root) {
+    let t = 0;
+    root?.traverse((o) => {
+      if (!o.isMesh || !o.geometry) return;
+      const g = o.geometry;
+      if (g.index) t += g.index.count / 3;
+      else if (g.attributes?.position) t += g.attributes.position.count / 3;
+    });
+    return t | 0;
+  }
+
+  /**
+   * Si collision.glb manque : BVH sur le GLB visuel (même logique que collision dédiée).
+   * Refusé si trop de triangles (utilise collision.glb simplifié).
+   */
+  tryAttachBVHFromVisualMap(visualRoot) {
+    if (!visualRoot) return false;
+    const tris = CollisionWorld.estimateTriangleCount(visualRoot);
+    if (tris > VISUAL_BVH_TRIANGLE_BUDGET) {
+      console.warn(
+        `[Collisions] ~${tris} triangles sur le visuel — trop pour un BVH auto (limite ${VISUAL_BVH_TRIANGLE_BUDGET}). Exporte un collision.glb simplifié.`
+      );
+      return false;
+    }
+    const ok = this.attachBVHFromGLTFScene(visualRoot);
+    if (ok) {
+      this._bvhFromVisualFallback = true;
+      console.log('[Collisions] BVH construit depuis le GLB visuel (aucun collision.glb valide).');
+    }
+    return ok;
   }
 
   get useBVH() {
@@ -129,6 +193,7 @@ export class CollisionWorld {
     this._bvhHorizontalSkipFloorLike = !horizontalUsesBlockerOnly;
     this.collisionMeshes = collisionMeshes;
     this._bvhWalkableGeometry = walkableGeometry;
+    this._bvhFromVisualFallback = false;
     this.walls.length = 0;
     if (this._wantBoundaryWalls) this._addBorders();
     const mode = explicitTypeMode ? 'userData.type (floor|stair|wall|object)' : 'heuristique + noms';
@@ -250,6 +315,7 @@ export class CollisionWorld {
     this._bvhWalkableGeometry = null;
     this._wantBoundaryWalls = false;
     this._safetyFloorY = null;
+    this._bvhFromVisualFallback = false;
     this.walls.length = 0;
     this.meshes.length = 0;
     this.allMeshesForRaycast.length = 0;
@@ -266,6 +332,13 @@ export class CollisionWorld {
 
     const mapFootX = Math.max(this.mapBounds.max.x - this.mapBounds.min.x, 1);
     const mapFootZ = Math.max(this.mapBounds.max.z - this.mapBounds.min.z, 1);
+    const mapFootY = Math.max(this.mapBounds.max.y - this.mapBounds.min.y, 1);
+    this._mapSpan.set(mapFootX, mapFootY, mapFootZ);
+    this._mapDiag = Math.hypot(mapFootX, mapFootY, mapFootZ);
+
+    this._autoTallWallHeight = THREE.MathUtils.clamp(mapFootY * 0.11, 2.6, 10);
+    this._autoWallSliceHalfSpan = THREE.MathUtils.clamp(mapFootY * 0.095, 2.2, 9);
+
     const mapArea = mapFootX * mapFootZ;
 
     const colliderMeshes = this.meshes.filter(m => RE_COLLIDER_ONLY.test(m.name));
@@ -325,7 +398,7 @@ export class CollisionWorld {
     this._recomputeSafetyFloor();
     if (this._safetyFloorY != null) {
       console.log(
-        `[Collisions] Plancher de secours Y≈${this._safetyFloorY.toFixed(2)} (min carte − ${SAFETY_FLOOR_OFFSET} m) — pas de chute infinie.`
+        `[Collisions] Plancher de secours Y≈${this._safetyFloorY.toFixed(2)} — pas de chute infinie (carte ~${mapFootY.toFixed(0)} m de haut).`
       );
     }
     return this;
@@ -334,7 +407,8 @@ export class CollisionWorld {
   _addBorders() {
     const b = this.mapBounds;
     if (b.isEmpty()) return;
-    const m = 0.3, h = 200;
+    const m = Math.max(0.25, Math.min(this._mapSpan.x, this._mapSpan.z) * 0.002);
+    const h = Math.min(950, Math.max(90, this._mapSpan.y * 4.5, this._mapDiag * 1.2));
     const mn = b.min, mx = b.max;
     this.walls.push(
       new THREE.Box3(new THREE.Vector3(mn.x - m, mn.y, mn.z - m), new THREE.Vector3(mn.x, mn.y + h, mx.z + m)),
@@ -477,17 +551,18 @@ export class CollisionWorld {
     const maxRing = 16;
     const step = 0.22;
 
+    const tolY = Math.max(0.38, height * 0.9);
     const tryCandidate = (x, z) => {
       let gy = this.getSpawnGroundY(x, z, preferY);
-      if (gy < -9000) return false;
+      if (gy <= NO_GROUND) return false;
       _spawnTry.set(x, gy + 0.02, z);
-      this.resolveSpawnOverlaps(_spawnTry, radius, height, 12);
+      this.resolveSpawnOverlaps(_spawnTry, radius, height, 14);
       gy = this.getSpawnGroundY(_spawnTry.x, _spawnTry.z, preferY);
-      if (gy < -9000) return false;
+      if (gy <= NO_GROUND) return false;
       _spawnTry.y = gy + 0.02;
-      const gBelow = this.getGroundBelow(_spawnTry.x, _spawnTry.y, _spawnTry.z);
-      if (gBelow < -9000) return false;
-      if (Math.abs(_spawnTry.y - gBelow - 0.02) > 0.35) return false;
+      const gBelow = this.getGroundBelow(_spawnTry.x, _spawnTry.y, _spawnTry.z, radius);
+      if (gBelow <= NO_GROUND) return false;
+      if (Math.abs(_spawnTry.y - gBelow - 0.02) > tolY) return false;
       return true;
     };
 
@@ -506,105 +581,126 @@ export class CollisionWorld {
     }
 
     const gy = this.getSpawnGroundY(baseX, baseZ, preferY);
-    if (gy > -9000) return new THREE.Vector3(baseX, gy + 0.02, baseZ);
+    if (gy > NO_GROUND) return new THREE.Vector3(baseX, gy + 0.02, baseZ);
     return desired.clone();
   }
 
   /**
-   * Hauteur du sol sous (x,z) pour des pieds à feetY.
-   * Prend la surface la plus haute sous les pieds (pas le premier hit aléatoire), pour éviter
-   * de « perdre » le sol après un micro décalage ou une chute courte.
+   * Sol sous les pieds : BVH multi-sondes puis meshes multi-sondes, paramètres adaptés à la bbox.
+   * @param {number} [sampleRadius] empreinte ~ rayon joueur pour lisser pentes / bords
    */
-  getGroundBelow(x, feetY, z) {
+  getGroundBelow(x, feetY, z, sampleRadius = 0.07) {
+    const gOpts = this._groundProbeOptions();
+    let best = NO_GROUND;
+
     if (this.useBVH) {
       const groundGeom =
         this._bvhWalkableGeometry?.boundsTree != null ? this._bvhWalkableGeometry : this._bvhGeometry;
-      const gy = bvhGroundYBelow(groundGeom, x, feetY, z);
-      if (gy > -9000) return gy;
+      const gy = bvhGroundYBelowMulti(groundGeom, x, feetY, z, sampleRadius, gOpts);
+      if (gy > NO_GROUND) best = gy;
     }
 
+    if (best > NO_GROUND) return best;
     if (this.meshes.length === 0) return this._fallbackSafetyGroundY();
 
-    const originY = feetY + 1.2;
-    _ray.ray.origin.set(x, originY, z);
-    _ray.ray.direction.set(0, -1, 0);
-    const minY = this.mapBounds.isEmpty() ? feetY - 500 : this.mapBounds.min.y - 250;
-    _ray.far = Math.min(9000, Math.max(400, originY - minY));
-
-    const hits = _ray.intersectObjects(this.meshes, false);
-    if (hits.length === 0) return this._fallbackSafetyGroundY();
-
-    let best = -9999;
+    const probeLift = THREE.MathUtils.clamp(this._mapSpan.y * 0.08, 1.4, 90);
+    const originY = feetY + probeLift;
+    const minY = this.mapBounds.isEmpty() ? feetY - 800 : this.mapBounds.min.y - Math.max(300, this._mapSpan.y);
+    _ray.far = this._meshRayFar(originY, minY);
 
     const considerNormal = (hit) => {
       if (!hit.face || !hit.object) return true;
       _n.set(hit.face.normal.x, hit.face.normal.y, hit.face.normal.z);
       _n.transformDirection(hit.object.matrixWorld);
-      return _n.y > 0.08;
+      return _n.y > 0.06;
     };
 
-    for (const h of hits) {
-      if (meshShouldSkipGroundSnap(h.object)) continue;
-      const py = h.point.y;
-      if (py > feetY + 0.32) continue;
-      if (py < feetY - 12) continue;
-      if (!considerNormal(h)) continue;
-      best = Math.max(best, py);
+    const samplePattern = [
+      [0, 0],
+      [0.9, 0],
+      [-0.9, 0],
+      [0, 0.9],
+      [0, -0.9],
+      [0.65, 0.65],
+      [-0.65, 0.65],
+      [0.65, -0.65],
+      [-0.65, -0.65],
+    ];
+    const sr = Math.max(0.02, sampleRadius);
+    const maxStep = gOpts.maxStepUp;
+    const maxDrop = Math.min(gOpts.maxDropBelowFeet, 80);
+
+    for (const [kx, kz] of samplePattern) {
+      _groundSample.set(x + kx * sr, 0, z + kz * sr);
+      _ray.ray.origin.set(_groundSample.x, originY, _groundSample.z);
+      _ray.ray.direction.set(0, -1, 0);
+      const hits = _ray.intersectObjects(this.meshes, false);
+      let local = NO_GROUND;
+      for (const h of hits) {
+        if (meshShouldSkipGroundSnap(h.object)) continue;
+        const py = h.point.y;
+        if (py > feetY + maxStep) continue;
+        if (py < feetY - maxDrop) continue;
+        if (!considerNormal(h)) continue;
+        local = Math.max(local, py);
+      }
+      if (local <= NO_GROUND) {
+        for (const h of hits) {
+          if (meshShouldSkipGroundSnap(h.object)) continue;
+          const py = h.point.y;
+          if (py <= feetY + maxStep + 0.9 && py >= feetY - maxDrop - 5) local = Math.max(local, py);
+        }
+      }
+      if (local > best) best = local;
     }
 
-    if (best > -9000) return best;
-
-    for (const h of hits) {
-      if (meshShouldSkipGroundSnap(h.object)) continue;
-      const py = h.point.y;
-      if (py <= feetY + 1.2 && py >= feetY - 25) best = Math.max(best, py);
-    }
-
-    return best > -9000 ? best : this._fallbackSafetyGroundY();
+    return best > NO_GROUND ? best : this._fallbackSafetyGroundY();
   }
 
-  getGroundHeightBelow(x, y, z) {
-    return this.getGroundBelow(x, y, z);
+  getGroundHeightBelow(x, y, z, sampleRadius) {
+    return this.getGroundBelow(x, y, z, sampleRadius);
   }
 
   /**
    * Sol pour un spawn aléatoire (pas les spawns custom) : rayon du haut de la bbox.
    */
   getSpawnGroundY(x, z, preferY = 0) {
+    const spawnOpts = this._spawnRayOptions();
     if (this.useBVH) {
       const maxY = this.mapBounds.isEmpty() ? preferY + 500 : this.mapBounds.max.y;
       const groundGeom =
         this._bvhWalkableGeometry?.boundsTree != null ? this._bvhWalkableGeometry : this._bvhGeometry;
-      const gy = bvhSpawnGroundY(groundGeom, x, z, preferY, maxY);
-      if (gy > -9000) return gy;
+      const gy = bvhSpawnGroundY(groundGeom, x, z, preferY, maxY, spawnOpts);
+      if (gy > NO_GROUND) return gy;
     }
 
     if (this.meshes.length === 0) return this._fallbackSafetyGroundY();
     const b = this.mapBounds;
-    const top = (b.isEmpty() ? preferY + 500 : b.max.y) + 120;
+    const extra = spawnOpts.spawnExtraAboveMax;
+    const top = (b.isEmpty() ? preferY + 500 : b.max.y) + extra;
     const originY = Math.max(top, preferY + 80);
     _ray.ray.origin.set(x, originY, z);
     _ray.ray.direction.set(0, -1, 0);
-    const minY = b.isEmpty() ? originY - 4000 : b.min.y - 50;
-    const vSpan = b.isEmpty() ? 800 : Math.max(b.max.y - b.min.y, 80);
-    _ray.far = Math.min(20000, Math.max(350, originY - minY + 80, vSpan * 4));
+    const minY = b.isEmpty() ? originY - 8000 : b.min.y - 80;
+    _ray.far = this._meshRayFar(originY, minY);
 
     const hits = _ray.intersectObjects(this.meshes, false).filter(
       (h) => !meshShouldSkipGroundSnap(h.object)
     );
     if (hits.length === 0) return this._fallbackSafetyGroundY();
 
-    const margins = [4, 25, 120, 800];
+    const sy = Math.max(this._mapSpan.y, 1);
+    const margins = [6, 32, 160, 520, Math.min(3200, 240 + sy * 3.2)];
     for (const m of margins) {
-      let best = -9999;
+      let best = NO_GROUND;
       for (const h of hits) {
         const py = h.point.y;
         if (py <= preferY + m) best = Math.max(best, py);
       }
-      if (best > -9000) return best;
+      if (best > NO_GROUND) return best;
     }
     const lastY = hits[hits.length - 1].point.y;
-    if (lastY > -9000) return lastY;
+    if (lastY > NO_GROUND) return lastY;
     return this._fallbackSafetyGroundY();
   }
 
@@ -630,7 +726,7 @@ export class CollisionWorld {
       const cz = (b.min.z + b.max.z) * 0.5;
       const preferY = (b.min.y + b.max.y) * 0.5;
       const gy = this.getSpawnGroundY(cx, cz, preferY);
-      if (gy > -9000) return new THREE.Vector3(cx, gy + 0.02, cz);
+      if (gy > NO_GROUND) return new THREE.Vector3(cx, gy + 0.02, cz);
       return new THREE.Vector3(cx, b.max.y + 1, cz);
     }
 
@@ -642,7 +738,7 @@ export class CollisionWorld {
 
     const tryXZ = (x, z) => {
       const gy = this.getSpawnGroundY(x, z, preferY);
-      if (gy > -9000) return new THREE.Vector3(x, gy + 0.02, z);
+      if (gy > NO_GROUND) return new THREE.Vector3(x, gy + 0.02, z);
       return null;
     };
 
