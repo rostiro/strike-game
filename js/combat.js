@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { PLAYER_BODY_SCALE } from './player.js';
 
 const _ray = new THREE.Raycaster();
 _ray.far = 500;
@@ -34,45 +35,53 @@ export class CombatSystem {
       const dummy = this._createDummy();
       dummy.position.copy(pos);
       this.scene.add(dummy);
-      const data = { mesh: dummy, hp: 100, maxHp: 100, headY: pos.y + 0.52, respawnTimer: 0, alive: true };
+      const data = {
+        mesh: dummy,
+        hp: 100,
+        maxHp: 100,
+        headY: pos.y + 0.52 * PLAYER_BODY_SCALE,
+        respawnTimer: 0,
+        alive: true,
+      };
       this.targets.push(data);
       this.targetMeshes.push(dummy);
     }
   }
 
   _createDummy() {
+    const s = PLAYER_BODY_SCALE;
     const group = new THREE.Group();
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0x884422, roughness: 0.8 });
     const headMat = new THREE.MeshStandardMaterial({ color: 0xddaa77, roughness: 0.7 });
 
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.24, 0.1), bodyMat);
-    torso.position.y = 0.32;
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.16 * s, 0.24 * s, 0.1 * s), bodyMat);
+    torso.position.y = 0.32 * s;
     torso.castShadow = true;
     group.add(torso);
 
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), headMat);
-    head.position.y = 0.52;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.06 * s, 8, 8), headMat);
+    head.position.y = 0.52 * s;
     head.castShadow = true;
     head.name = 'head';
     group.add(head);
 
-    const legL = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.2, 0.06), bodyMat);
-    legL.position.set(-0.04, 0.1, 0);
+    const legL = new THREE.Mesh(new THREE.BoxGeometry(0.05 * s, 0.2 * s, 0.06 * s), bodyMat);
+    legL.position.set(-0.04 * s, 0.1 * s, 0);
     legL.castShadow = true;
     group.add(legL);
 
-    const legR = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.2, 0.06), bodyMat);
-    legR.position.set(0.04, 0.1, 0);
+    const legR = new THREE.Mesh(new THREE.BoxGeometry(0.05 * s, 0.2 * s, 0.06 * s), bodyMat);
+    legR.position.set(0.04 * s, 0.1 * s, 0);
     legR.castShadow = true;
     group.add(legR);
 
-    const armL = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.19, 0.05), bodyMat);
-    armL.position.set(-0.12, 0.32, 0);
+    const armL = new THREE.Mesh(new THREE.BoxGeometry(0.045 * s, 0.19 * s, 0.05 * s), bodyMat);
+    armL.position.set(-0.12 * s, 0.32 * s, 0);
     armL.castShadow = true;
     group.add(armL);
 
-    const armR = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.19, 0.05), bodyMat);
-    armR.position.set(0.12, 0.32, 0);
+    const armR = new THREE.Mesh(new THREE.BoxGeometry(0.045 * s, 0.19 * s, 0.05 * s), bodyMat);
+    armR.position.set(0.12 * s, 0.32 * s, 0);
     armR.castShadow = true;
     group.add(armR);
 
@@ -99,7 +108,7 @@ export class CombatSystem {
         if (tIdx >= 0) {
           const target = this.targets[tIdx];
           const hitY = hit.point.y;
-          const isHeadshot = hitY >= target.mesh.position.y + 0.45;
+          const isHeadshot = hitY >= target.mesh.position.y + 0.45 * PLAYER_BODY_SCALE;
           const dmg = isHeadshot ? weapon.headDmg : weapon.bodyDmg;
           target.hp -= dmg;
 
@@ -215,7 +224,7 @@ export class CombatSystem {
         t.mesh.visible = true;
         const pos = collisionWorld.getRandomSpawnPoint();
         t.mesh.position.copy(pos);
-        t.headY = pos.y + 0.52;
+        t.headY = pos.y + 0.52 * PLAYER_BODY_SCALE;
       }
     }
 
