@@ -1,6 +1,7 @@
 import * as THREE from 'three';
+import { PLAYER_BODY_SCALE } from './player.js';
 
-const DEFAULT_HEAD_OFFSET = 0.32;
+const DEFAULT_HEAD_OFFSET = 0.32 * PLAYER_BODY_SCALE;
 
 export class NetworkClient {
   constructor() {
@@ -180,29 +181,30 @@ export class RemotePlayerManager {
   }
 
   _createPlayerMesh(name) {
+    const s = PLAYER_BODY_SCALE;
     const group = new THREE.Group();
     group.userData.headShotMinOffset = this._headShotMinOffset;
 
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0x335577, roughness: 0.7 });
     const headMat = new THREE.MeshStandardMaterial({ color: 0xddbb88, roughness: 0.6 });
 
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.2, 0.09), bodyMat);
-    torso.position.y = 0.22;
+    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.14 * s, 0.2 * s, 0.09 * s), bodyMat);
+    torso.position.y = 0.22 * s;
     torso.castShadow = true;
     group.add(torso);
 
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 8), headMat);
-    head.position.y = 0.38;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.055 * s, 8, 8), headMat);
+    head.position.y = 0.38 * s;
     head.castShadow = true;
     head.name = 'head';
     group.add(head);
 
-    const legL = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.14, 0.05), bodyMat);
-    legL.position.set(-0.04, 0.07, 0);
+    const legL = new THREE.Mesh(new THREE.BoxGeometry(0.05 * s, 0.14 * s, 0.05 * s), bodyMat);
+    legL.position.set(-0.04 * s, 0.07 * s, 0);
     group.add(legL);
 
-    const legR = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.14, 0.05), bodyMat);
-    legR.position.set(0.04, 0.07, 0);
+    const legR = new THREE.Mesh(new THREE.BoxGeometry(0.05 * s, 0.14 * s, 0.05 * s), bodyMat);
+    legR.position.set(0.04 * s, 0.07 * s, 0);
     group.add(legR);
 
     return group;
