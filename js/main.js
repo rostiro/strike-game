@@ -8,22 +8,18 @@ import { UI } from './ui.js';
 import { NetworkClient, RemotePlayerManager } from './network.js';
 
 /**
- * Carte visuelle + collision dédiée.
- *
- * Blender → collision.glb : un mesh par objet ; appliquer les transforms avant export.
- * Custom Property `type` (→ userData.type) : floor | stair | wall | object
- * (voir js/bvh-capsule.js en tête de fichier pour le détail).
+ * Carte : `ville.glb` = rendu + (si MODELS.collision est vide) BVH de collision sur la même scène.
+ * Optionnel : collision.glb simplifié + userData.type (voir js/bvh-capsule.js).
  */
 const MODELS = {
-  /** GLB visuel (équivalent map.glb). */
   ville: 'models/ville.glb',
   /**
-   * GLB collision. Mettre `null` ou `''` pour ne pas le charger (BVH tout de suite sur le visuel).
-   * Si le fichier manque / plante, timeout → même fallback (évite chargement bloqué sur 1/3).
+   * `null` ou `''` = pas de collision.glb : BVH construit sur **ville.glb** (peut être lourd).
+   * Mettre `'models/collision.glb'` si tu exportes un mesh collision séparé.
    */
-  collision: 'models/collision.glb',
+  collision: null,
 };
-/** Timeout réseau + parse collision.glb (ms). Après ça : fallback BVH sur la ville. */
+/** Utilisé seulement si MODELS.collision est une URL non vide. */
 const COLLISION_GLB_TIMEOUT_MS = 70000;
 /** true = 4 murs invisibles sur la bbox du GLB visuel (recommandé avec collision.glb / BVH si la mesh n’inclut pas les bords). */
 const MAP_BOUNDARY_COLLISION = true;
@@ -157,7 +153,8 @@ function tryCollisionBVHFromVisual(model, reason) {
 function loadCollisionsPhase(model) {
   const url = MODELS.collision;
   if (url == null || url === '') {
-    tryCollisionBVHFromVisual(model, 'collision.glb désactivé (MODELS.collision vide)');
+    ui.updateLoadProgress('Collisions (ville)', 1, 3);
+    tryCollisionBVHFromVisual(model, 'pas de collision.glb — BVH sur le visuel');
     return Promise.resolve();
   }
 
