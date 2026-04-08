@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { NO_GROUND } from './bvh-capsule.js';
 
 export const PLAYER_HEIGHT = 0.42;
 export const PLAYER_RADIUS = 0.075;
@@ -91,9 +92,9 @@ export class Player {
     const dz = this._moveDir.z * speed * dt;
 
     if (collisionWorld) {
-      const step = 0.042;
+      const step = Math.min(0.05, Math.max(0.03, PLAYER_RADIUS * 0.48));
       const dist = Math.hypot(dx, dz);
-      const n = Math.max(1, Math.ceil(dist / step));
+      const n = Math.min(48, Math.max(1, Math.ceil(dist / step)));
       const sx = dx / n;
       const sz = dz / n;
       for (let i = 0; i < n; i++) {
@@ -113,9 +114,14 @@ export class Player {
     this.position.y += this.velocity.y * dt;
 
     if (collisionWorld) {
-      const groundY = collisionWorld.getGroundBelow(this.position.x, this.position.y, this.position.z);
+      const groundY = collisionWorld.getGroundBelow(
+        this.position.x,
+        this.position.y,
+        this.position.z,
+        PLAYER_RADIUS
+      );
 
-      if (groundY > -9000) {
+      if (groundY > NO_GROUND) {
         const snapY = groundY + 0.02;
         if (this.velocity.y <= 0 && this.position.y <= snapY + GROUND_SNAP_UP) {
           this.position.y = snapY;
