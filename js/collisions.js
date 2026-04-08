@@ -591,22 +591,10 @@ export class CollisionWorld {
   }
 
   /**
-   * Sol sous les pieds : BVH multi-sondes puis meshes multi-sondes, paramètres adaptés à la bbox.
-   * @param {number} [sampleRadius] empreinte ~ rayon joueur pour lisser pentes / bords
+   * Rayons sur le GLB visuel (ville) : ignore tables/caisses via meshShouldSkipGroundSnap.
    */
-  getGroundBelow(x, feetY, z, sampleRadius = 0.07) {
-    const gOpts = this._groundProbeOptions();
-    let best = NO_GROUND;
-
-    if (this.useBVH) {
-      const groundGeom =
-        this._bvhWalkableGeometry?.boundsTree != null ? this._bvhWalkableGeometry : this._bvhGeometry;
-      const gy = bvhGroundYBelowMulti(groundGeom, x, feetY, z, sampleRadius, gOpts);
-      if (gy > NO_GROUND) best = gy;
-    }
-
-    if (best > NO_GROUND) return best;
-    if (this.meshes.length === 0) return this._fallbackSafetyGroundY();
+  _groundFromVisualMeshes(x, feetY, z, sampleRadius, gOpts) {
+    if (this.meshes.length === 0) return NO_GROUND;
 
     const probeLift = THREE.MathUtils.clamp(this._mapSpan.y * 0.08, 1.4, 90);
     const originY = feetY + probeLift;
@@ -634,6 +622,7 @@ export class CollisionWorld {
     const sr = Math.max(0.02, sampleRadius);
     const maxStep = gOpts.maxStepUp;
     const maxDrop = Math.min(gOpts.maxDropBelowFeet, 80);
+    let best = NO_GROUND;
 
     for (const [kx, kz] of samplePattern) {
       _groundSample.set(x + kx * sr, 0, z + kz * sr);
@@ -658,8 +647,40 @@ export class CollisionWorld {
       }
       if (local > best) best = local;
     }
+    return best;
+  }
 
-    return best > NO_GROUND ? best : this._fallbackSafetyGroundY();
+  /**
+   * Sol sous les pieds :
+   * 1) BVH « walkable » seulement (floor/stair dans collision.glb) — pas le dessus des props.
+   * 2) Meshes visuels en ignorant props (noms / userData.type object).
+   * 3) BVH complet seulement s’il n’y a pas de couche walkable (sinon on évite de se coller sur les caisses).
+   */
+  getGroundBelow(x, feetY, z, sampleRadius = 0.07) {
+    const gOpts = this._groundProbeOptions();
+    const hasWalkableBVH = !!(this.useBVH && this._bvhWalkableGeometry?.boundsTree);
+
+    if (hasWalkableBVH) {
+      const gy = bvhGroundYBelowMulti(
+        this._bvhWalkableGeometry,
+        x,
+        feetY,
+        z,
+        sampleRadius,
+        gOpts
+      );
+      if (gy > NO_GROUND) return gy;
+    }
+
+    const meshY = this._groundFromVisualMeshes(x, feetY, z, sampleRadius, gOpts);
+    if (meshY > NO_GROUND) return meshY;
+
+    if (this.useBVH && this._bvhGeometry?.boundsTree && !hasWalkableBVH) {
+      const gy = bvhGroundYBelowMulti(this._bvhGeometry, x, feetY, z, sampleRadius, gOpts);
+      if (gy > NO_GROUND) return gy;
+    }
+
+    return this._fallbackSafetyGroundY();
   }
 
   getGroundHeightBelow(x, y, z, sampleRadius) {
@@ -671,41 +692,56 @@ export class CollisionWorld {
    */
   getSpawnGroundY(x, z, preferY = 0) {
     const spawnOpts = this._spawnRayOptions();
-    if (this.useBVH) {
+    const hasWalkableBVH = !!(this.useBVH && this._bvhWalkableGeometry?.boundsTree);
+
+    if (hasWalkableBVH) {
       const maxY = this.mapBounds.isEmpty() ? preferY + 500 : this.mapBounds.max.y;
-      const groundGeom =
-        this._bvhWalkableGeometry?.boundsTree != null ? this._bvhWalkableGeometry : this._bvhGeometry;
-      const gy = bvhSpawnGroundY(groundGeom, x, z, preferY, maxY, spawnOpts);
+      const gy = bvhSpawnGroundY(
+        this._bvhWalkableGeometry,
+        x,
+        z,
+        preferY,
+        maxY,
+        spawnOpts
+      );
       if (gy > NO_GROUND) return gy;
     }
 
-    if (this.meshes.length === 0) return this._fallbackSafetyGroundY();
-    const b = this.mapBounds;
-    const extra = spawnOpts.spawnExtraAboveMax;
-    const top = (b.isEmpty() ? preferY + 500 : b.max.y) + extra;
-    const originY = Math.max(top, preferY + 80);
-    _ray.ray.origin.set(x, originY, z);
-    _ray.ray.direction.set(0, -1, 0);
-    const minY = b.isEmpty() ? originY - 8000 : b.min.y - 80;
-    _ray.far = this._meshRayFar(originY, minY);
+    if (this.meshes.length > 0) {
+      const b = this.mapBounds;
+      const extra = spawnOpts.spawnExtraAboveMax;
+      const top = (b.isEmpty() ? preferY + 500 : b.max.y) + extra;
+      const originY = Math.max(top, preferY + 80);
+      _ray.ray.origin.set(x, originY, z);
+      _ray.ray.direction.set(0, -1, 0);
+      const minY = b.isEmpty() ? originY - 8000 : b.min.y - 80;
+      _ray.far = this._meshRayFar(originY, minY);
 
-    const hits = _ray.intersectObjects(this.meshes, false).filter(
-      (h) => !meshShouldSkipGroundSnap(h.object)
-    );
-    if (hits.length === 0) return this._fallbackSafetyGroundY();
-
-    const sy = Math.max(this._mapSpan.y, 1);
-    const margins = [6, 32, 160, 520, Math.min(3200, 240 + sy * 3.2)];
-    for (const m of margins) {
-      let best = NO_GROUND;
-      for (const h of hits) {
-        const py = h.point.y;
-        if (py <= preferY + m) best = Math.max(best, py);
+      const hits = _ray.intersectObjects(this.meshes, false).filter(
+        (h) => !meshShouldSkipGroundSnap(h.object)
+      );
+      if (hits.length > 0) {
+        const sy = Math.max(this._mapSpan.y, 1);
+        const margins = [6, 32, 160, 520, Math.min(3200, 240 + sy * 3.2)];
+        for (const m of margins) {
+          let best = NO_GROUND;
+          for (const h of hits) {
+            const py = h.point.y;
+            if (py <= preferY + m) best = Math.max(best, py);
+          }
+          if (best > NO_GROUND) return best;
+        }
+        const lastY = hits[hits.length - 1].point.y;
+        if (lastY > NO_GROUND) return lastY;
       }
-      if (best > NO_GROUND) return best;
     }
-    const lastY = hits[hits.length - 1].point.y;
-    if (lastY > NO_GROUND) return lastY;
+
+    if (this.useBVH && this._bvhGeometry?.boundsTree && !hasWalkableBVH) {
+      const maxY = this.mapBounds.isEmpty() ? preferY + 500 : this.mapBounds.max.y;
+      const gy = bvhSpawnGroundY(this._bvhGeometry, x, z, preferY, maxY, spawnOpts);
+      if (gy > NO_GROUND) return gy;
+    }
+
     return this._fallbackSafetyGroundY();
   }
 
