@@ -1,0 +1,16 @@
+{
+  "name": "strike-zone",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FPS multijoueur style CS2 en Three.js",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

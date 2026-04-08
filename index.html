@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>STRIKE ZONE</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{background:#000;font-family:'Segoe UI','Courier New',monospace;color:#fff}
+canvas{display:block;position:fixed;inset:0;z-index:0;width:100%;height:100%}
+
+/* ── LOADING ── */
+#loading{
+  position:fixed;inset:0;background:#08080c;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  z-index:200;transition:opacity .8s;
+}
+#loading h2{font-size:36px;color:#d4a537;letter-spacing:8px;margin-bottom:4px;font-weight:300}
+#loading p{color:#555;font-size:11px;letter-spacing:3px}
+#load-txt{color:#888!important;font-size:12px!important;margin-top:18px}
+#prog-wrap{width:320px;height:3px;background:#1a1a1a;border-radius:2px;margin-top:14px}
+#prog-fill{height:100%;background:linear-gradient(90deg,#d4a537,#f0c040);border-radius:2px;width:0%;transition:width .3s}
+
+/* ── Overlay base (menu, death, pause) ── */
+.overlay{
+  position:fixed;inset:0;flex-direction:column;align-items:center;justify-content:center;
+  display:none;
+}
+.overlay.visible{display:flex}
+
+/* ── MAIN MENU ── */
+#menu{z-index:100;background:linear-gradient(180deg,rgba(0,0,0,.35) 0%,rgba(0,0,0,.7) 100%)}
+#menu h1{
+  font-size:52px;font-weight:200;letter-spacing:14px;color:#d4a537;
+  text-shadow:0 0 40px rgba(212,165,55,.3);margin-bottom:6px;
+}
+#menu .subtitle{font-size:11px;color:#666;letter-spacing:6px;margin-bottom:50px}
+#menu button{
+  width:260px;padding:14px 0;margin:6px 0;border:1px solid rgba(212,165,55,.4);
+  border-radius:4px;background:rgba(20,20,28,.85);color:#d4a537;
+  font-size:14px;font-family:inherit;letter-spacing:3px;cursor:pointer;
+  transition:all .2s;backdrop-filter:blur(6px);
+}
+#menu button:hover{background:rgba(212,165,55,.15);border-color:#d4a537}
+#menu .hint{position:absolute;bottom:20px;font-size:9px;color:#444;letter-spacing:2px}
+
+/* ── HUD ── */
+#hud{
+  position:fixed;bottom:0;left:0;right:0;z-index:10;display:none;
+  pointer-events:none;padding:14px 22px;
+}
+#hud.visible{display:block}
+#hud-left{position:absolute;bottom:16px;left:20px}
+#hud-right{position:absolute;bottom:16px;right:20px;text-align:right}
+.hud-block{
+  background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.08);
+  border-radius:6px;padding:10px 16px;backdrop-filter:blur(6px);min-width:160px;
+}
+.hud-label{font-size:9px;color:#888;letter-spacing:2px;text-transform:uppercase;margin-bottom:4px}
+.hud-hp-row{display:flex;align-items:center;gap:10px}
+.hud-hp-val{font-size:26px;font-weight:200;color:#fff;min-width:36px}
+.hud-bar{flex:1;height:4px;background:#222;border-radius:2px;overflow:hidden;min-width:100px}
+.hud-bar-fill{height:100%;border-radius:2px;transition:width .15s}
+#hud-hp-bar{background:linear-gradient(90deg,#c22,#f44)}
+.hud-ammo-row{display:flex;align-items:baseline;gap:4px;justify-content:flex-end}
+.hud-ammo-current{font-size:32px;font-weight:200;color:#fff}
+.hud-ammo-sep{font-size:14px;color:#555}
+.hud-ammo-total{font-size:14px;color:#666}
+#hud-weapon-name{font-size:10px;color:#888;letter-spacing:2px;margin-top:4px;text-transform:uppercase}
+
+/* ── RELOAD BAR ── */
+#reload-bar{
+  position:fixed;bottom:90px;left:50%;transform:translateX(-50%);z-index:12;
+  width:200px;height:4px;background:rgba(0,0,0,.6);border-radius:2px;
+  display:none;border:1px solid rgba(255,255,255,.1);
+}
+#reload-fill{height:100%;background:linear-gradient(90deg,#d4a537,#f0c040);border-radius:2px;width:0%;transition:width .05s linear}
+
+/* ── CROSSHAIR ── */
+#crosshair{
+  position:fixed;top:50%;left:50%;z-index:11;
+  transform:translate(-50%,-50%);pointer-events:none;display:none;
+  width:80px;height:80px;
+}
+#crosshair.visible{display:block}
+.ch-line{position:absolute;background:rgba(255,255,255,.85);transition:all .08s}
+#ch-top{width:2px;left:calc(50% - 1px);bottom:50%}
+#ch-bot{width:2px;left:calc(50% - 1px);top:50%}
+#ch-left{height:2px;top:calc(50% - 1px);right:50%}
+#ch-right{height:2px;top:calc(50% - 1px);left:50%}
+.ch-dot{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:2px;height:2px;background:rgba(255,255,255,.6);border-radius:50%;
+}
+
+/* reticle: scope */
+#scope-overlay{
+  position:fixed;inset:0;z-index:11;pointer-events:none;display:none;
+}
+#scope-overlay.visible{display:block}
+#scope-overlay .scope-bg{position:absolute;inset:0;background:rgba(0,0,0,.85)}
+#scope-overlay .scope-hole{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:min(70vh,70vw);height:min(70vh,70vw);border-radius:50%;
+  box-shadow:0 0 0 200vmax rgba(0,0,0,.88);
+  border:2px solid rgba(255,255,255,.15);
+}
+#scope-overlay .scope-cross-h{
+  position:absolute;top:50%;left:0;right:0;height:1px;
+  background:rgba(255,50,50,.5);transform:translateY(-50%);
+}
+#scope-overlay .scope-cross-v{
+  position:absolute;left:50%;top:0;bottom:0;width:1px;
+  background:rgba(255,50,50,.5);transform:translateX(-50%);
+}
+#scope-overlay .scope-dot{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:4px;height:4px;background:#f33;border-radius:50%;
+}
+#scope-overlay .scope-mil{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:min(50vh,50vw);height:min(50vh,50vw);
+  border:1px solid rgba(255,255,255,.06);border-radius:50%;
+}
+
+/* reticle: chevron */
+.ch-chevron{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:0;height:0;
+  border-left:5px solid transparent;border-right:5px solid transparent;
+  border-bottom:8px solid rgba(100,255,100,.7);
+}
+
+/* reticle: circle */
+.ch-circle{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:20px;height:20px;border-radius:50%;
+  border:1.5px solid rgba(255,255,255,.5);transition:all .08s;
+}
+
+/* ── HITMARKER ── */
+#hitmarker{
+  position:fixed;top:50%;left:50%;z-index:12;transform:translate(-50%,-50%);
+  font-size:22px;font-weight:bold;pointer-events:none;display:none;
+  text-shadow:0 0 6px rgba(0,0,0,.8);
+}
+#hitmarker::before{content:'\2715'}
+.hm-anim{animation:hm-flash .15s ease-out}
+@keyframes hm-flash{0%{opacity:1;transform:translate(-50%,-50%) scale(1.5)}100%{opacity:.5;transform:translate(-50%,-50%) scale(1)}}
+
+/* ── KILLFEED ── */
+#killfeed{
+  position:fixed;top:14px;right:14px;z-index:12;pointer-events:none;
+  display:flex;flex-direction:column;gap:3px;align-items:flex-end;
+}
+.kf-entry{
+  background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.08);
+  border-radius:4px;padding:4px 10px;font-size:10px;color:#ccc;
+  letter-spacing:1px;backdrop-filter:blur(4px);
+  animation:kf-in .3s ease-out;
+}
+.kf-head{color:#ff4444;border-color:rgba(255,60,60,.25)}
+@keyframes kf-in{0%{opacity:0;transform:translateX(30px)}100%{opacity:1;transform:translateX(0)}}
+
+/* ── DEATH SCREEN ── */
+#death-screen{z-index:50;background:rgba(120,10,10,.35)}
+#death-screen h2{font-size:48px;font-weight:200;color:#ff3333;letter-spacing:10px;text-shadow:0 0 30px rgba(255,0,0,.4)}
+#death-screen p{color:#888;font-size:12px;margin-top:10px;letter-spacing:2px}
+
+/* ── PAUSE ── */
+#pause-screen{z-index:60;background:rgba(0,0,0,.7);backdrop-filter:blur(8px)}
+#pause-screen h2{font-size:28px;color:#d4a537;letter-spacing:8px;font-weight:200;margin-bottom:30px}
+#pause-screen button{
+  width:220px;padding:12px 0;margin:5px 0;border:1px solid rgba(212,165,55,.35);
+  border-radius:4px;background:rgba(20,20,28,.8);color:#ccc;
+  font-size:13px;font-family:inherit;letter-spacing:2px;cursor:pointer;
+  transition:all .2s;
+}
+#pause-screen button:hover{background:rgba(212,165,55,.15);color:#d4a537;border-color:#d4a537}
+
+/* ── LOBBY ── */
+#lobby-screen{z-index:100;background:linear-gradient(170deg,rgba(8,8,18,.55) 0%,rgba(0,0,0,.8) 100%)}
+.lobby-layout{display:flex;width:94vw;max-width:1100px;gap:20px;align-items:flex-start}
+.lobby-left{flex:1;min-width:0}
+.lobby-right{width:300px;flex-shrink:0}
+
+.lobby-header{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+.lobby-header h2{font-size:22px;color:#fff;letter-spacing:4px;font-weight:400;margin:0}
+.lobby-header .lobby-badge{
+  background:linear-gradient(135deg,#d4a537,#f0c040);color:#000;font-size:9px;font-weight:700;
+  padding:3px 10px;border-radius:10px;letter-spacing:2px;
+}
+
+#lobby-code-display{
+  background:rgba(255,255,255,.04);border:1px dashed rgba(212,165,55,.4);border-radius:8px;
+  padding:14px 20px;text-align:center;margin-bottom:16px;
+}
+#lobby-code-display .lc-label{font-size:8px;color:#666;letter-spacing:3px;text-transform:uppercase;margin-bottom:4px}
+#lobby-code-display .lc-code{font-size:36px;color:#d4a537;letter-spacing:10px;font-weight:200;font-family:monospace}
+#lobby-code-display .lc-copy{
+  font-size:8px;color:#555;margin-top:4px;cursor:pointer;transition:color .2s;
+}
+#lobby-code-display .lc-copy:hover{color:#d4a537}
+
+.lobby-join-row{display:flex;gap:6px;margin-bottom:16px}
+.lobby-join-row input{
+  flex:1;padding:10px 12px;border:1px solid rgba(255,255,255,.1);border-radius:6px;
+  background:rgba(255,255,255,.04);color:#d4a537;font-size:14px;font-family:monospace;
+  letter-spacing:4px;text-transform:uppercase;text-align:center;
+}
+.lobby-join-row input::placeholder{color:#444;text-transform:none;letter-spacing:1px;font-family:inherit;font-size:11px}
+.lobby-join-row input:focus{outline:none;border-color:rgba(212,165,55,.5)}
+
+#lobby-screen button{
+  padding:10px 20px;border:none;border-radius:6px;
+  background:rgba(255,255,255,.06);color:#ccc;font-size:11px;font-family:inherit;
+  letter-spacing:1px;cursor:pointer;transition:all .2s;
+}
+#lobby-screen button:hover{background:rgba(255,255,255,.12);color:#fff}
+.lobby-btn-primary{
+  background:linear-gradient(135deg,#d4a537,#b8912a)!important;color:#000!important;
+  font-weight:600!important;letter-spacing:2px!important;
+}
+.lobby-btn-primary:hover{background:linear-gradient(135deg,#f0c040,#d4a537)!important}
+.lobby-btn-ready{
+  background:rgba(50,180,50,.2)!important;color:#5f5!important;
+  border:1px solid rgba(50,180,50,.3)!important;
+}
+.lobby-btn-ready:hover{background:rgba(50,180,50,.35)!important}
+.lobby-btn-ready.is-ready{background:rgba(50,180,50,.5)!important;color:#fff!important}
+.lobby-btn-danger{background:rgba(180,40,40,.2)!important;color:#f66!important}
+.lobby-btn-danger:hover{background:rgba(180,40,40,.35)!important}
+
+.lobby-players-panel{
+  background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);
+  border-radius:10px;padding:14px;
+}
+.lobby-players-header{
+  display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;
+}
+.lobby-players-header span{font-size:10px;color:#888;letter-spacing:2px;text-transform:uppercase}
+#lobby-player-count{font-size:10px;color:#d4a537}
+#lobby-players{max-height:340px;overflow-y:auto}
+.lp-entry{
+  display:flex;align-items:center;gap:10px;
+  padding:8px 10px;border-radius:6px;margin-bottom:4px;
+  background:rgba(255,255,255,.02);transition:background .15s;
+}
+.lp-entry:hover{background:rgba(255,255,255,.05)}
+.lp-avatar{
+  width:28px;height:28px;border-radius:50%;
+  background:linear-gradient(135deg,#335,#557);
+  display:flex;align-items:center;justify-content:center;
+  font-size:11px;color:#aaa;font-weight:600;flex-shrink:0;
+}
+.lp-info{flex:1;min-width:0}
+.lp-name{font-size:12px;color:#ddd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lp-role{font-size:8px;letter-spacing:1px}
+.lp-host-tag{color:#d4a537}
+.lp-status{font-size:9px;letter-spacing:1px;flex-shrink:0}
+.lp-ready-tag{color:#5f5}
+.lp-waiting-tag{color:#555}
+
+.lobby-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.lobby-bottom{display:flex;justify-content:space-between;align-items:center;margin-top:16px}
+.lobby-bottom-left{display:flex;gap:8px}
+#lobby-status-msg{font-size:9px;color:#555;letter-spacing:1px}
+
+/* ── WEAPON SELECT ── */
+#weapon-select{z-index:100;background:rgba(0,0,0,.8);backdrop-filter:blur(10px)}
+#weapon-select h2{font-size:28px;color:#d4a537;letter-spacing:8px;font-weight:200;margin-bottom:6px}
+#weapon-select .ws-sub{font-size:10px;color:#666;letter-spacing:2px;margin-bottom:20px}
+.ws-row{display:flex;flex-direction:column;gap:12px;width:90vw;max-width:720px}
+.ws-row-label{font-size:11px;color:#888;letter-spacing:3px;text-transform:uppercase;margin-bottom:4px}
+.ws-cards{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.ws-card{
+  width:110px;padding:10px 8px;border:1px solid rgba(255,255,255,.1);border-radius:6px;
+  background:rgba(20,20,30,.7);cursor:pointer;transition:all .15s;text-align:center;
+}
+.ws-card:hover{border-color:rgba(212,165,55,.5);background:rgba(30,30,40,.9)}
+.ws-card.selected{border-color:#d4a537;background:rgba(212,165,55,.12);box-shadow:0 0 12px rgba(212,165,55,.2)}
+.ws-card .ws-name{font-size:11px;color:#ddd;letter-spacing:1px;margin-bottom:4px;font-weight:500}
+.ws-card .ws-stat{font-size:8px;color:#777;line-height:1.5}
+.ws-card .ws-stat b{color:#aaa}
+.ws-btns{display:flex;gap:10px;margin-top:18px;justify-content:center}
+#weapon-select button{
+  padding:12px 28px;border:1px solid rgba(212,165,55,.4);border-radius:4px;
+  background:rgba(20,20,28,.85);color:#d4a537;font-size:13px;font-family:inherit;
+  letter-spacing:2px;cursor:pointer;transition:all .2s;
+}
+#weapon-select button:hover{background:rgba(212,165,55,.15);border-color:#d4a537}
+#ws-confirm{background:rgba(212,165,55,.2)!important}
+
+/* ── SPAWN EDITOR ── */
+#spawn-editor{
+  position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:150;
+  display:none;pointer-events:auto;
+  background:rgba(10,10,16,.88);border:1px solid rgba(212,165,55,.4);
+  border-radius:8px;padding:10px 18px;backdrop-filter:blur(8px);
+  text-align:center;min-width:320px;
+}
+#spawn-editor.visible{display:block}
+#spawn-editor h3{font-size:13px;color:#d4a537;letter-spacing:3px;font-weight:300;margin-bottom:6px}
+#spawn-editor .se-info{font-size:9px;color:#777;line-height:1.6;margin-bottom:8px}
+#spawn-editor .se-count{font-size:11px;color:#ccc;margin-bottom:8px}
+#spawn-editor button{
+  padding:7px 16px;margin:3px;border:1px solid rgba(212,165,55,.35);border-radius:4px;
+  background:rgba(20,20,28,.8);color:#d4a537;font-size:10px;font-family:inherit;
+  letter-spacing:1px;cursor:pointer;transition:all .15s;
+}
+#spawn-editor button:hover{background:rgba(212,165,55,.15);border-color:#d4a537}
+#se-save{background:rgba(40,120,40,.3)!important;border-color:rgba(60,180,60,.4)!important;color:#6f6!important}
+#se-save:hover{background:rgba(40,120,40,.5)!important}
+#spawn-editor textarea{
+  width:100%;height:80px;margin-top:6px;font-size:8px;font-family:ui-monospace,monospace;
+  background:#0a0a10;color:#8b8;border:1px solid #333;border-radius:4px;padding:6px;
+  resize:vertical;display:none;
+}
+#spawn-editor textarea.visible{display:block}
+.spawn-marker{pointer-events:none}
+</style>
+</head>
+<body>
+
+<!-- LOADING -->
+<div id="loading">
+  <h2>STRIKE ZONE</h2>
+  <p>TACTICAL SHOOTER</p>
+  <p id="load-txt">Chargement...</p>
+  <div id="prog-wrap"><div id="prog-fill"></div></div>
+</div>
+
+<!-- MENU -->
+<div id="menu" class="overlay">
+  <h1>STRIKE ZONE</h1>
+  <div class="subtitle">TACTICAL SHOOTER</div>
+  <button id="btn-play">JOUER</button>
+  <button id="btn-multi">MULTIJOUEUR</button>
+  <button id="btn-spawns" style="margin-top:16px;font-size:10px;width:200px;padding:10px 0;opacity:.7">CONFIGURER SPAWNS</button>
+  <div class="hint">ZQSD Deplacement &middot; Souris Viser &middot; Clic Tirer &middot; 1/2/3 Armes &middot; R Recharger &middot; Shift Sprint &middot; Espace Saut</div>
+</div>
+
+<!-- HUD -->
+<div id="hud">
+  <div id="hud-left">
+    <div class="hud-block">
+      <div class="hud-label">Sante</div>
+      <div class="hud-hp-row">
+        <span class="hud-hp-val" id="hud-hp">100</span>
+        <div class="hud-bar"><div class="hud-bar-fill" id="hud-hp-bar" style="width:100%"></div></div>
+      </div>
+    </div>
+  </div>
+  <div id="hud-right">
+    <div class="hud-block">
+      <div class="hud-ammo-row">
+        <span class="hud-ammo-current" id="hud-ammo">30</span>
+        <span class="hud-ammo-sep">/</span>
+        <span class="hud-ammo-total" id="hud-ammo-total">30</span>
+      </div>
+      <div id="hud-weapon-name">ASSAUT</div>
+    </div>
+  </div>
+</div>
+
+<!-- CROSSHAIR -->
+<div id="crosshair">
+  <div class="ch-line" id="ch-top"></div>
+  <div class="ch-line" id="ch-bot"></div>
+  <div class="ch-line" id="ch-left"></div>
+  <div class="ch-line" id="ch-right"></div>
+  <div class="ch-dot"></div>
+</div>
+
+<!-- SCOPE OVERLAY (sniper ADS) -->
+<div id="scope-overlay">
+  <div class="scope-hole"></div>
+  <div class="scope-cross-h"></div>
+  <div class="scope-cross-v"></div>
+  <div class="scope-dot"></div>
+  <div class="scope-mil"></div>
+</div>
+
+<!-- HITMARKER -->
+<div id="hitmarker"></div>
+
+<!-- KILLFEED -->
+<div id="killfeed"></div>
+
+<!-- RELOAD -->
+<div id="reload-bar"><div id="reload-fill"></div></div>
+
+<!-- DEATH -->
+<div id="death-screen" class="overlay">
+  <h2>ELIMINE</h2>
+  <p>Respawn dans quelques secondes...</p>
+</div>
+
+<!-- PAUSE -->
+<div id="pause-screen" class="overlay">
+  <h2>PAUSE</h2>
+  <button id="btn-resume">REPRENDRE</button>
+  <button id="btn-quit">MENU PRINCIPAL</button>
+</div>
+
+<!-- LOBBY -->
+<div id="lobby-screen" class="overlay">
+  <div class="lobby-layout">
+    <div class="lobby-left">
+      <div class="lobby-header">
+        <h2>STRIKE ZONE</h2>
+        <span class="lobby-badge">LOBBY</span>
+      </div>
+
+      <div id="lobby-code-display" style="display:none">
+        <div class="lc-label">Code de la partie</div>
+        <div class="lc-code" id="lobby-code">------</div>
+        <div class="lc-copy" id="lobby-copy-code">Cliquer pour copier</div>
+      </div>
+
+      <div class="lobby-join-row" id="lobby-join-section">
+        <input id="lobby-code-input" type="text" maxlength="6" placeholder="Entrer un code...">
+        <button id="lobby-join-btn">REJOINDRE</button>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-bottom:16px" id="lobby-create-section">
+        <button id="lobby-create" class="lobby-btn-primary" style="flex:1;padding:14px 0;font-size:13px">CREER UNE PARTIE</button>
+      </div>
+
+      <div class="lobby-actions" id="lobby-ingame-actions" style="display:none">
+        <button id="lobby-ready" class="lobby-btn-ready">PRET</button>
+        <button id="lobby-start" class="lobby-btn-primary" style="display:none">LANCER LA PARTIE</button>
+      </div>
+
+      <div class="lobby-bottom">
+        <div class="lobby-bottom-left">
+          <button id="lobby-back" class="lobby-btn-danger">QUITTER</button>
+        </div>
+        <div id="lobby-status-msg"></div>
+      </div>
+    </div>
+
+    <div class="lobby-right">
+      <div class="lobby-players-panel">
+        <div class="lobby-players-header">
+          <span>Joueurs</span>
+          <span id="lobby-player-count">0/10</span>
+        </div>
+        <div id="lobby-players"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- WEAPON SELECT -->
+<div id="weapon-select" class="overlay">
+  <h2>ARMEMENT</h2>
+  <div class="ws-sub">Choisis 2 armes pour le combat</div>
+  <div class="ws-row">
+    <div class="ws-row-label">Arme principale (1)</div>
+    <div class="ws-cards" id="ws-list-1"></div>
+  </div>
+  <div class="ws-row" style="margin-top:14px">
+    <div class="ws-row-label">Arme secondaire (2)</div>
+    <div class="ws-cards" id="ws-list-2"></div>
+  </div>
+  <div class="ws-btns">
+    <button id="ws-back">RETOUR</button>
+    <button id="ws-confirm">LANCER</button>
+  </div>
+</div>
+
+<!-- SPAWN EDITOR -->
+<div id="spawn-editor">
+  <h3>SPAWN EDITOR</h3>
+  <div class="se-info">
+    <b>ZQSD</b> deplacer &middot; <b>Souris</b> regarder &middot; <b>Espace/Ctrl</b> haut/bas<br>
+    <b>P</b> poser un spawn &middot; <b>X</b> supprimer le dernier
+  </div>
+  <div class="se-count" id="se-count">0 spawn(s)</div>
+  <button id="se-save">SAUVEGARDER</button>
+  <button id="se-clear">TOUT EFFACER</button>
+  <button id="se-export">EXPORTER CODE</button>
+  <button id="se-quit">QUITTER</button>
+  <textarea id="se-code" readonly></textarea>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/build/three.module.js",
+    "three/addons/": "./vendor/jsm/",
+    "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.7.3/build/index.module.js"
+  }
+}
+</script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
