@@ -16,8 +16,8 @@ const _n = new THREE.Vector3();
 const _spawnTry = new THREE.Vector3();
 const _groundSample = new THREE.Vector3();
 
-/** Limite triangles pour BVH auto depuis le GLB visuel (évite freeze sur scènes énormes). */
-export const VISUAL_BVH_TRIANGLE_BUDGET = 1_100_000;
+/** Au-delà : avertissement seul — on tente quand même le BVH visuel (sinon 0 collision intérieure en mode ground). */
+export const VISUAL_BVH_TRIANGLE_WARN = 2_500_000;
 
 /** Meshes dont le nom indique qu’on ne doit pas générer de murs (décor, LOD, etc.) */
 const RE_SKIP_WALL_BY_NAME = /no_?collide|nocol|decal|ignore_?mesh|trigger|volume|helper|proxy|lod\d|_lod|sky(box)?|emissive_only|glass_|nav_?mesh|blockout|occluder|occlusion|cull|invis|hidden|backdrop|debug|wire|bounds_?only|editor_|__preview|collisionpreview|stair|stairs|step|marche|escalier|ramp|rampe|balustr|banister|handrail/i;
@@ -152,18 +152,22 @@ export class CollisionWorld {
   tryAttachBVHFromVisualMap(visualRoot) {
     if (!visualRoot) return false;
     const tris = CollisionWorld.estimateTriangleCount(visualRoot);
-    if (tris > VISUAL_BVH_TRIANGLE_BUDGET) {
+    if (tris > VISUAL_BVH_TRIANGLE_WARN) {
       console.warn(
-        `[Collisions] ~${tris} triangles sur le visuel — trop pour un BVH auto (limite ${VISUAL_BVH_TRIANGLE_BUDGET}). Exporte un collision.glb simplifié.`
+        `[Collisions] ~${tris.toLocaleString()} triangles sur le visuel — BVH long / lourd. Idéal : collision.glb simplifié.`
       );
+    }
+    try {
+      const ok = this.attachBVHFromGLTFScene(visualRoot);
+      if (ok) {
+        this._bvhFromVisualFallback = true;
+        console.log('[Collisions] BVH construit depuis le GLB visuel (aucun collision.glb valide).');
+      }
+      return ok;
+    } catch (e) {
+      console.error('[Collisions] Impossible de construire le BVH sur le visuel :', e);
       return false;
     }
-    const ok = this.attachBVHFromGLTFScene(visualRoot);
-    if (ok) {
-      this._bvhFromVisualFallback = true;
-      console.log('[Collisions] BVH construit depuis le GLB visuel (aucun collision.glb valide).');
-    }
-    return ok;
   }
 
   get useBVH() {
@@ -190,7 +194,8 @@ export class CollisionWorld {
     }
     this._bvhGeometry = fullGeometry;
     this._bvhBlockerGeometry = blockerGeometry || fullGeometry;
-    this._bvhHorizontalSkipFloorLike = !horizontalUsesBlockerOnly;
+    /** Toujours tester toute la géométrie en XZ (évite « tout typé floor » = aucun mur). */
+    this._bvhHorizontalSkipFloorLike = false;
     this.collisionMeshes = collisionMeshes;
     this._bvhWalkableGeometry = walkableGeometry;
     this._bvhFromVisualFallback = false;
