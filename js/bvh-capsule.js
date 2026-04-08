@@ -152,7 +152,6 @@ export function buildPartitionedCollisionBVH(root) {
 
   const fullParts = entries.map((e) => e.geom);
   const walkParts = [];
-  const blockParts = [];
   let nWalk = 0;
   let nBlock = 0;
   let nFloorStair = 0;
@@ -166,17 +165,18 @@ export function buildPartitionedCollisionBVH(root) {
       walkParts.push(e.geom.clone());
       nWalk++;
     }
-    if (meshIsHorizontalBlocker(e.mesh, e.sx, e.sy, e.sz, explicitTypeMode)) {
-      blockParts.push(e.geom.clone());
-      nBlock++;
-    }
+    if (meshIsHorizontalBlocker(e.mesh, e.sx, e.sy, e.sz, explicitTypeMode)) nBlock++;
   }
 
   const mergedFull = _mergeBVH(fullParts);
   const mergedWalk = walkParts.length ? _mergeBVH(walkParts) : null;
-  let mergedBlock = blockParts.length ? _mergeBVH(blockParts) : null;
-  const horizontalUsesBlockerOnly = mergedBlock != null && blockParts.length > 0;
-  if (!mergedBlock && mergedFull) mergedBlock = mergedFull;
+  /**
+   * Capsule horizontale : toujours le BVH **complet**. Sinon, si tout est typé « floor »,
+   * le sous-ensemble « blocker » est vide → on ne testait plus de murs (traverser les bâtiments).
+   * Le découpage walkable sert uniquement aux rayons « sol » (évite snap sur tables, etc.).
+   */
+  const mergedBlock = mergedFull;
+  const horizontalUsesBlockerOnly = false;
 
   return {
     fullGeometry: mergedFull,
@@ -201,8 +201,9 @@ export function mergeWorldCollisionGeometry(root) {
 }
 
 export function bvhHorizontalMoveAndResolve(pos, dx, dz, radius, height, geometry, opts = {}) {
-  const passes = opts.passes ?? 12;
-  const skipFloorLikeTriangles = opts.skipFloorLikeTriangles !== false;
+  const passes = opts.passes ?? 14;
+  /** Par défaut false : tester tous les triangles (murs + dalles). Activer seulement si doublons avec un autre système. */
+  const skipFloorLikeTriangles = opts.skipFloorLikeTriangles === true;
   const tree = geometry?.boundsTree;
   if (!tree) {
     pos.x += dx;
